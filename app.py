@@ -6,7 +6,7 @@ from datetime import datetime
 
 # ========== CẤU HÌNH ỨNG DỤNG ==========
 st.set_page_config(page_title="Đối soát MS365 - Chuẩn 3 điều kiện", layout="wide")
-st.title("📊 CÔNG CỤ ĐỐI SOÁT MS365 - Domain + SKU + Quantity")
+st.title("📊 CÔNG CỤ ĐỐI SOÁT MS365 - Domain + SKU + Quantity (FINAL)")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -73,19 +73,18 @@ if st.button("🚀 Tiến hành đối soát"):
         df_ncc_keys_partial = set(df_ncc["Key_partial"])
 
         for _, row in merged.iterrows():
+            key_p = row.get("Key_partial", "")
             if row["_merge"] == "both":
                 status.append("✅ Khớp hoàn toàn")
                 score.append(100)
-            elif row["_merge"] == "left_only":
-                key_p = row.get("Key_partial", "")
+            elif row["_merge"] == "left_only":  # Có ở PO, không có ở NCC
                 if key_p in df_ncc_keys_partial:
                     status.append("⚠️ Sai lệch Quantity")
                     score.append(75)
                 else:
                     status.append("❌ Thiếu ở NCC")
                     score.append(0)
-            elif row["_merge"] == "right_only":
-                key_p = row.get("Key_partial", "")
+            elif row["_merge"] == "right_only":  # Có ở NCC, không có ở PO
                 if key_p in df_po_keys_partial:
                     status.append("⚠️ Sai lệch Quantity")
                     score.append(75)
@@ -115,7 +114,9 @@ if st.button("🚀 Tiến hành đối soát"):
         # --- Sheet Payment Summary ---
         total_po = len(df_po)
         total_match = sum(merged["Match_Status"] == "✅ Khớp hoàn toàn")
-        total_diff = sum(merged["Match_Status"].isin(["⚠️ Sai lệch Quantity", "❌ Thiếu ở NCC", "❌ Thiếu ở PO"]))
+        total_diff = sum(merged["Match_Status"].isin(["⚠️ Sai lệch Quantity"]))
+        total_missing_ncc = sum(merged["Match_Status"] == "❌ Thiếu ở NCC")
+        total_missing_po = sum(merged["Match_Status"] == "❌ Thiếu ở PO")
         total_usd = merged.loc[merged["Match_Status"] == "✅ Khớp hoàn toàn", "Partner_Cost_USD"].sum()
         total_vnd = merged.loc[merged["Match_Status"] == "✅ Khớp hoàn toàn", "Partner_Cost_VND"].sum()
 
@@ -123,7 +124,9 @@ if st.button("🚀 Tiến hành đối soát"):
             "Chỉ tiêu": [
                 "Tổng số PO",
                 "Số dòng khớp hoàn toàn",
-                "Số dòng lệch / thiếu",
+                "Số dòng sai lệch Quantity",
+                "Thiếu ở NCC",
+                "Thiếu ở PO",
                 "Tổng Partner Cost (USD)",
                 "Tổng Partner Cost (VND)",
                 "Ngày đối soát"
@@ -132,6 +135,8 @@ if st.button("🚀 Tiến hành đối soát"):
                 total_po,
                 total_match,
                 total_diff,
+                total_missing_ncc,
+                total_missing_po,
                 total_usd,
                 total_vnd,
                 datetime.now().strftime("%d/%m/%Y %H:%M")
