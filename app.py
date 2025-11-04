@@ -1,12 +1,11 @@
 import streamlit as st
 import pandas as pd
-from difflib import SequenceMatcher
 import io
 from datetime import datetime
 
 # ========== CẤU HÌNH ỨNG DỤNG ==========
-st.set_page_config(page_title="Đối soát MS365 - Chuẩn 3 điều kiện", layout="wide")
-st.title("📊 CÔNG CỤ ĐỐI SOÁT MS365 - Domain + SKU + Quantity (FINAL - FIXED)")
+st.set_page_config(page_title="Đối soát MS365 - Domain + SKU + Quantity (Final Fixed)", layout="wide")
+st.title("📊 CÔNG CỤ ĐỐI SOÁT MS365 - Domain + SKU + Quantity (FINAL SINGLE LINE)")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -14,9 +13,9 @@ with col1:
 with col2:
     internal_file = st.file_uploader("📥 Upload file PO nội bộ", type=["xlsx", "xls"])
 
-# ========== HÀM TIỆN ÍCH ==========
+# ========== HÀM CHUẨN HÓA ==========
 def normalize(s):
-    if pd.isna(s): 
+    if pd.isna(s):
         return ""
     return str(s).strip().lower()
 
@@ -49,79 +48,57 @@ if st.button("🚀 Tiến hành đối soát"):
         df_po["SKU_norm"] = df_po["Product"].apply(normalize)
         df_po["Quantity"] = pd.to_numeric(df_po["Quantity"], errors="coerce").fillna(0)
 
-        # --- Tạo khóa ---
-        df_ncc["Key_full"] = df_ncc["Domain_norm"] + "|" + df_ncc["SKU_norm"] + "|" + df_ncc["Billable_Quantity"].astype(str)
-        df_po["Key_full"] = df_po["Domain_norm"] + "|" + df_po["SKU_norm"] + "|" + df_po["Quantity"].astype(str)
-
-        # --- Merge full outer với hậu tố riêng ---
-        df_ncc_key = df_ncc[[
-            "Key_full", "Domain_norm", "SKU_norm", "Billable_Quantity",
-            "Subscription_ID", "Partner_Cost_USD", "Partner_Cost_VND"
-        ]]
-
+        # --- Gộp 2 file theo Domain + SKU ---
         merged = pd.merge(
-            df_po, df_ncc_key,
-            on="Key_full", how="outer", indicator=True,
-            suffixes=("_PO", "_NCC")
+            df_po,
+            df_ncc[["Domain_norm", "SKU_norm", "Billable_Quantity", "Subscription_ID", "Partner_Cost_USD", "Partner_Cost_VND"]],
+            on=["Domain_norm", "SKU_norm"],
+            how="outer",
+            suffixes=("_PO", "_NCC"),
+            indicator=True
         )
 
-        # === XÁC ĐỊNH TRẠNG THÁI CHÍNH XÁC ===
-        status, score = [], []
-
+        # --- Xác định trạng thái đối soát ---
+        match_status, qty_diff = [], []
         for _, row in merged.iterrows():
-            domain_po = row.get("Domain_norm_PO", "") or row.get("Domain_norm", "")
-            sku_po = row.get("SKU_norm_PO", "") or row.get("SKU_norm", "")
-            domain_ncc = row.get("Domain_norm_NCC", "") or row.get("Domain_norm", "")
-            sku_ncc = row.get("SKU_norm_NCC", "") or row.get("SKU_norm", "")
+            q_po = row.get("Quantity", 0)
+            q_ncc = row.get("Billable_Quantity", 0)
 
-            if row["_merge"] == "both":
-                status.append("✅ Khớp hoàn toàn")
-                score.append(100)
-            elif row["_merge"] == "left_only":  # Có ở PO, không có ở NCC
-                # Kiểm tra Domain + SKU trùng ở NCC (sai lệch Quantity)
-                ncc_match = df_ncc[
-                    (df_ncc["Domain_norm"] == domain_po) &
-                    (df_ncc["SKU_norm"] == sku_po)
-                ]
-                if not ncc_match.empty:
-                    status.append("⚠️ Sai lệch Quantity (PO > NCC)")
-                    score.append(75)
+            if pd.isna(q_po): q_po = 0
+            if pd.isna(q_ncc): q_ncc = 0
+
+            if q_po == q_ncc and q_po > 0:
+                match_status.append("✅ Khớp hoàn toàn")
+                qty_diff.append(0)
+            elif q_po > 0 and q_ncc > 0 and q_po != q_ncc:
+                if q_po > q_ncc:
+                    match_status.append("⚠️ Sai lệch Quantity (PO > NCC)")
                 else:
-                    status.append("❌ Thiếu ở NCC")
-                    score.append(0)
-            elif row["_merge"] == "right_only":  # Có ở NCC, không có ở PO
-                # Kiểm tra Domain + SKU trùng ở PO (sai lệch Quantity)
-                po_match = df_po[
-                    (df_po["Domain_norm"] == domain_ncc) &
-                    (df_po["SKU_norm"] == sku_ncc)
-                ]
-                if not po_match.empty:
-                    status.append("⚠️ Sai lệch Quantity (NCC > PO)")
-                    score.append(75)
-                else:
-                    status.append("❌ Thiếu ở PO")
-                    score.append(0)
+                    match_status.append("⚠️ Sai lệch Quantity (NCC > PO)")
+                qty_diff.append(abs(q_po - q_ncc))
+            elif q_po > 0 and q_ncc == 0:
+                match_status.append("❌ Thiếu ở NCC")
+                qty_diff.append(q_po)
+            elif q_ncc > 0 and q_po == 0:
+                match_status.append("❌ Thiếu ở PO")
+                qty_diff.append(q_ncc)
             else:
-                status.append("⚠️ Không xác định")
-                score.append(0)
+                match_status.append("⚠️ Không xác định")
+                qty_diff.append(0)
 
-        merged["Match_Status"] = status
-        merged["Match_Score (%)"] = score
-        merged.drop(columns=["_merge"], inplace=True)
+        merged["Quantity_Diff"] = qty_diff
+        merged["Match_Status"] = match_status
 
         # --- Báo cáo tổng hợp (Summary) ---
-        cost_cols = ["Partner_Cost_USD", "Partner_Cost_VND"]
-        for c in cost_cols:
-            if c not in merged.columns:
-                merged[c] = 0
-
-        summary = merged.groupby("SKU_norm_PO", dropna=False).agg({
+        summary = merged.groupby("SKU_norm", dropna=False).agg({
             "Quantity": "sum",
+            "Billable_Quantity": "sum",
             "Partner_Cost_USD": "sum",
             "Partner_Cost_VND": "sum"
         }).reset_index().rename(columns={
-            "SKU_norm_PO": "SKU_Name (Normalized)",
-            "Quantity": "Total_Quantity",
+            "SKU_norm": "SKU_Name (Normalized)",
+            "Quantity": "Total_Quantity_PO",
+            "Billable_Quantity": "Total_Quantity_NCC",
             "Partner_Cost_USD": "Total_Cost_USD",
             "Partner_Cost_VND": "Total_Cost_VND"
         })
@@ -129,7 +106,8 @@ if st.button("🚀 Tiến hành đối soát"):
         # --- Payment Summary ---
         total_po = len(df_po)
         total_match = sum(merged["Match_Status"] == "✅ Khớp hoàn toàn")
-        total_diff = sum(merged["Match_Status"].str.contains("Sai lệch Quantity", na=False))
+        total_diff_po = sum(merged["Match_Status"] == "⚠️ Sai lệch Quantity (PO > NCC)")
+        total_diff_ncc = sum(merged["Match_Status"] == "⚠️ Sai lệch Quantity (NCC > PO)")
         total_missing_ncc = sum(merged["Match_Status"] == "❌ Thiếu ở NCC")
         total_missing_po = sum(merged["Match_Status"] == "❌ Thiếu ở PO")
         total_usd = merged.loc[merged["Match_Status"] == "✅ Khớp hoàn toàn", "Partner_Cost_USD"].sum()
@@ -139,7 +117,8 @@ if st.button("🚀 Tiến hành đối soát"):
             "Chỉ tiêu": [
                 "Tổng số PO",
                 "Số dòng khớp hoàn toàn",
-                "Số dòng sai lệch Quantity",
+                "Sai lệch Quantity (PO > NCC)",
+                "Sai lệch Quantity (NCC > PO)",
                 "Thiếu ở NCC",
                 "Thiếu ở PO",
                 "Tổng Partner Cost (USD)",
@@ -149,7 +128,8 @@ if st.button("🚀 Tiến hành đối soát"):
             "Giá trị": [
                 total_po,
                 total_match,
-                total_diff,
+                total_diff_po,
+                total_diff_ncc,
                 total_missing_ncc,
                 total_missing_po,
                 total_usd,
@@ -172,7 +152,7 @@ if st.button("🚀 Tiến hành đối soát"):
         st.download_button(
             label="⬇️ Tải file Excel kết quả đối soát tổng hợp",
             data=towrite,
-            file_name=f"doi_soat_MS365_final_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            file_name=f"doi_soat_MS365_singleline_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
