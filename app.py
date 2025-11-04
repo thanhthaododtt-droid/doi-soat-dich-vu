@@ -31,10 +31,13 @@ with col2:
     internal_file = st.file_uploader("📥 Upload file Nội bộ (PO)", type=["xlsx", "xls", "csv"], key="internal")
 
 # ------------------ HELPER ------------------
-def read_file(f):
+def read_file(f, service_type=None):
+    """Đọc file Excel/CSV, xử lý riêng cho MS365 (header ở dòng 3)"""
     if f is None:
         return None
     try:
+        if service_type == "MS365":
+            return pd.read_excel(f, header=2, dtype=str)  # header ở dòng thứ 3
         if f.name.endswith(".csv"):
             return pd.read_csv(f, dtype=str)
         else:
@@ -57,8 +60,8 @@ if st.button("🚀 Tiến hành đối soát"):
     elif not vendor_file or not internal_file:
         st.warning("⚠️ Cần upload đủ cả hai file (Nhà cung cấp & Nội bộ).")
     else:
-        df_vendor = read_file(vendor_file)
-        df_internal = read_file(internal_file)
+        df_vendor = read_file(vendor_file, service_type)
+        df_internal = read_file(internal_file, service_type)
 
         if service_type == "MS365":
             st.subheader("🔍 Đang xử lý đối soát Microsoft 365...")
@@ -75,10 +78,27 @@ if st.button("🚀 Tiến hành đối soát"):
 
                 # Lấy dữ liệu nội bộ
                 df_internal.columns = [c.strip() for c in df_internal.columns]
+
+                # Tìm cột Description/Product/Quantity
+                desc_col = None
+                qty_col = None
+                for c in df_internal.columns:
+                    lc = c.lower()
+                    if "description" in lc or "product" in lc or "recurring" in lc:
+                        desc_col = c
+                    if "quantity" in lc or "qty" in lc:
+                        qty_col = c
+                if desc_col is None:
+                    desc_col = df_internal.columns[0]
+                if qty_col is None:
+                    df_internal["__qty__"] = 1
+                    qty_col = "__qty__"
+
+                df_internal[qty_col] = pd.to_numeric(df_internal[qty_col], errors="coerce").fillna(0)
                 internal_group = (
-                    df_internal.groupby("Description", as_index=False)
-                    .agg({"Quantity": "sum"})
-                    .rename(columns={"Description": "Plan", "Quantity": "Qty_Internal"})
+                    df_internal.groupby(desc_col, as_index=False)
+                    .agg({qty_col: "sum"})
+                    .rename(columns={desc_col: "Plan", qty_col: "Qty_Internal"})
                 )
 
                 # So khớp tên Plan (fuzzy)
@@ -93,22 +113,13 @@ if st.button("🚀 Tiến hành đối soát"):
                         if score > best_score:
                             best_score = score
                             best_match = internal_row
-                    if best_match is not None and best_score >= 0.6:
-                        matched_rows.append({
-                            "Plan": vendor_row["Plan"],
-                            "USD": vendor_row["USD"],
-                            "VND": vendor_row["VND"],
-                            "Qty_Internal": best_match["Qty_Internal"],
-                            "Match_Score": round(best_score * 100, 1)
-                        })
-                    else:
-                        matched_rows.append({
-                            "Plan": vendor_row["Plan"],
-                            "USD": vendor_row["USD"],
-                            "VND": vendor_row["VND"],
-                            "Qty_Internal": None,
-                            "Match_Score": round(best_score * 100, 1)
-                        })
+                    matched_rows.append({
+                        "Plan": vendor_row["Plan"],
+                        "USD": vendor_row.get("USD", ""),
+                        "VND": vendor_row.get("VND", ""),
+                        "Qty_Internal": best_match["Qty_Internal"] if best_match is not None else "",
+                        "Match_Score": round(best_score * 100, 1)
+                    })
 
                 result = pd.DataFrame(matched_rows)
 
@@ -118,10 +129,10 @@ if st.button("🚀 Tiến hành đối soát"):
                     result["VND_Quydoi"] = result["VND_Quydoi"].astype(int)
 
                 # Tổng hợp
-                result["USD"] = pd.to_numeric(result["USD"], errors="coerce").fillna(0)
-                result["VND"] = pd.to_numeric(result["VND"], errors="coerce").fillna(0)
-                total_usd = result["USD"].sum()
-                total_vnd = result["VND"].sum()
+                result["USD_num"] = pd.to_numeric(result["USD"], errors="coerce").fillna(0)
+                result["VND_num"] = pd.to_numeric(result["VND"], errors="coerce").fillna(0)
+                total_usd = result["USD_num"].sum()
+                total_vnd = result["VND_num"].sum()
                 total_qd = result["VND_Quydoi"].sum() if "VND_Quydoi" in result else None
 
                 st.success("✅ Đối soát hoàn tất!")
@@ -156,6 +167,7 @@ if st.button("🚀 Tiến hành đối soát"):
 
             except Exception as e:
                 st.error(f"Lỗi trong quá trình xử lý: {e}")
+
         else:
             st.info(f"Hiện chưa định nghĩa logic đối soát riêng cho dịch vụ: **{service_type}**. "
                     "Bạn có thể sử dụng tính năng này cho MS365 trước.")
