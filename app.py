@@ -8,7 +8,12 @@ from datetime import datetime
 st.set_page_config(page_title="Công cụ đối soát dịch vụ nội bộ", layout="wide")
 
 st.title("📊 CÔNG CỤ ĐỐI SOÁT DỊCH VỤ NỘI BỘ")
-st.markdown("Ứng dụng dùng để đối chiếu dữ liệu giữa **file Nhà cung cấp** và **file Nội bộ (PO)** cho các dịch vụ CNTT.")
+st.markdown(
+    """
+Ứng dụng hỗ trợ đối chiếu dữ liệu giữa **file Nhà cung cấp** và **file Nội bộ (PO)**  
+Áp dụng cho các dịch vụ CNTT như MS365, SSL, ODS License, Google Workspace, TMQT, Chứng thư CKS.
+"""
+)
 
 # ------------------ INPUT ------------------
 service_type = st.selectbox(
@@ -37,7 +42,7 @@ def read_file(f, service_type=None):
         return None
     try:
         if service_type == "MS365":
-            return pd.read_excel(f, header=2, dtype=str)  # header ở dòng thứ 3
+            return pd.read_excel(f, header=2, dtype=str)  # dòng thứ 3 là header
         if f.name.endswith(".csv"):
             return pd.read_csv(f, dtype=str)
         else:
@@ -51,13 +56,15 @@ def normalize_text(s):
     try:
         if s is None or (isinstance(s, float) and pd.isna(s)):
             return ""
-        # Nếu là kiểu datetime, chuyển sang định dạng chuỗi yyyy-mm-dd
+        # Nếu là kiểu datetime, chuyển sang dạng chuỗi
         if hasattr(s, "strftime"):
             s = s.strftime("%Y-%m-%d")
         return str(s).strip().lower()
     except Exception:
-        return str(s)
-
+        try:
+            return str(s)
+        except:
+            return ""
 
 def fuzzy_match(a, b):
     return SequenceMatcher(None, a, b).ratio()
@@ -74,8 +81,9 @@ if st.button("🚀 Tiến hành đối soát"):
 
         if service_type == "MS365":
             st.subheader("🔍 Đang xử lý đối soát Microsoft 365...")
+
             try:
-                # Lấy dữ liệu NCC
+                # Chuẩn hóa dữ liệu NCC
                 df_vendor.columns = [c.strip() for c in df_vendor.columns]
                 df_vendor = df_vendor.rename(columns={
                     "Row Labels": "Plan",
@@ -85,7 +93,7 @@ if st.button("🚀 Tiến hành đối soát"):
                 df_vendor = df_vendor.dropna(subset=["Plan"])
                 df_vendor = df_vendor[df_vendor["Plan"] != "Row Labels"]
 
-                # Lấy dữ liệu nội bộ
+                # Chuẩn hóa dữ liệu nội bộ
                 df_internal.columns = [c.strip() for c in df_internal.columns]
 
                 # Tìm cột Description/Product/Quantity
@@ -127,12 +135,12 @@ if st.button("🚀 Tiến hành đối soát"):
                         "USD": vendor_row.get("USD", ""),
                         "VND": vendor_row.get("VND", ""),
                         "Qty_Internal": best_match["Qty_Internal"] if best_match is not None else "",
-                        "Match_Score": round(best_score * 100, 1)
+                        "Match_Score (%)": round(best_score * 100, 1)
                     })
 
                 result = pd.DataFrame(matched_rows)
 
-                # Xử lý tỷ giá
+                # Xử lý tỷ giá (nếu có)
                 if exchange_rate:
                     result["VND_Quydoi"] = pd.to_numeric(result["USD"], errors="coerce").fillna(0) * exchange_rate
                     result["VND_Quydoi"] = result["VND_Quydoi"].astype(int)
@@ -144,8 +152,9 @@ if st.button("🚀 Tiến hành đối soát"):
                 total_vnd = result["VND_num"].sum()
                 total_qd = result["VND_Quydoi"].sum() if "VND_Quydoi" in result else None
 
+                # Hiển thị kết quả
                 st.success("✅ Đối soát hoàn tất!")
-                st.dataframe(result)
+                st.dataframe(result, use_container_width=True)
 
                 st.markdown("### 📊 Tổng hợp")
                 st.write(f"**Tổng (USD):** {total_usd:,.2f}")
@@ -153,7 +162,7 @@ if st.button("🚀 Tiến hành đối soát"):
                 if exchange_rate:
                     st.write(f"**Tổng (VND quy đổi):** {total_qd:,.0f}")
 
-                # Xuất Excel
+                # Xuất file Excel
                 towrite = io.BytesIO()
                 with pd.ExcelWriter(towrite, engine="openpyxl") as writer:
                     result.to_excel(writer, index=False, sheet_name="MS365_Matched")
@@ -178,5 +187,7 @@ if st.button("🚀 Tiến hành đối soát"):
                 st.error(f"Lỗi trong quá trình xử lý: {e}")
 
         else:
-            st.info(f"Hiện chưa định nghĩa logic đối soát riêng cho dịch vụ: **{service_type}**. "
-                    "Bạn có thể sử dụng tính năng này cho MS365 trước.")
+            st.info(
+                f"Hiện chưa định nghĩa logic đối soát riêng cho dịch vụ: **{service_type}**. "
+                "Bạn có thể sử dụng tính năng này cho MS365 trước."
+            )
