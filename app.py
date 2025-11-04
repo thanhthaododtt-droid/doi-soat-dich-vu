@@ -47,8 +47,17 @@ def read_file(f, service_type=None):
         return None
 
 def normalize_text(s):
-    if pd.isna(s): return ""
-    return str(s).strip().lower()
+    """Chuẩn hóa text an toàn, tránh lỗi khi gặp datetime hoặc số"""
+    try:
+        if s is None or (isinstance(s, float) and pd.isna(s)):
+            return ""
+        # Nếu là kiểu datetime, chuyển sang định dạng chuỗi yyyy-mm-dd
+        if hasattr(s, "strftime"):
+            s = s.strftime("%Y-%m-%d")
+        return str(s).strip().lower()
+    except Exception:
+        return str(s)
+
 
 def fuzzy_match(a, b):
     return SequenceMatcher(None, a, b).ratio()
